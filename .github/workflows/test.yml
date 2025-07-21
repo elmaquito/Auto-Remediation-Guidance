@@ -1,0 +1,196 @@
+name: Auto-Remediation Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests daily at 6 AM UTC
+    - cron: '0 6 * * *'
+
+jobs:
+  test:
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        powershell-version: ['5.1', '7.x']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup PowerShell ${{ matrix.powershell-version }}
+      if: matrix.powershell-version == '7.x'
+      uses: actions/setup-powershell@v1
+      with:
+        powershell-version: ${{ matrix.powershell-version }}
+
+    - name: Install Pester
+      shell: pwsh
+      run: |
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        Install-Module -Name Pester -Force -SkipPublisherCheck
+        Install-Module -Name PSScriptAnalyzer -Force
+
+    - name: Verify PowerShell version
+      shell: pwsh
+      run: |
+        Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)"
+        Get-Module -Name Pester -ListAvailable
+        Get-Module -Name PSScriptAnalyzer -ListAvailable
+
+    - name: Run Unit Tests
+      shell: pwsh
+      run: |
+        $config = New-PesterConfiguration
+        $config.Run.Path = "./tests"
+        $config.Run.PassThru = $true
+        $config.TestResult.Enabled = $true
+        $config.TestResult.OutputFormat = "NUnitXml"
+        $config.TestResult.OutputPath = "./TestResults.xml"
+        $config.Output.Verbosity = "Detailed"
+        $config.CodeCoverage.Enabled = $true
+        $config.CodeCoverage.Path = "./scripts/*.ps1"
+        $config.CodeCoverage.OutputFormat = "JaCoCo"
+        $config.CodeCoverage.OutputPath = "./Coverage.xml"
+        
+        $result = Invoke-Pester -Configuration $config
+        
+        Write-Host "Test Results:"
+        Write-Host "  Total: $($result.TotalCount)"
+        Write-Host "  Passed: $($result.PassedCount)" 
+        Write-Host "  Failed: $($result.FailedCount)"
+        Write-Host "  Skipped: $($result.SkippedCount)"
+        
+        if ($result.CodeCoverage) {
+          Write-Host "  Coverage: $([math]::Round($result.CodeCoverage.CoveragePercent, 2))%"
+        }
+        
+        if ($result.FailedCount -gt 0) {
+          exit 1
+        }
+
+    - name: Run Code Analysis
+      shell: pwsh
+      run: |
+        $analysisResults = Invoke-ScriptAnalyzer -Path "./scripts" -Recurse -ReportSummary
+        
+        if ($analysisResults) {
+          Write-Host "Code Analysis Issues Found:" -ForegroundColor Red
+          $analysisResults | Format-Table -AutoSize
+          
+          # Fail the build if there are error-level issues
+          $errors = $analysisResults | Where-Object { $_.Severity -eq 'Error' }
+          if ($errors) {
+            Write-Error "Found $($errors.Count) error-level issues"
+            exit 1
+          }
+        } else {
+          Write-Host "No code analysis issues found!" -ForegroundColor Green
+        }
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-ps${{ matrix.powershell-version }}
+        path: |
+          TestResults.xml
+          Coverage.xml
+
+    - name: Publish Test Results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: PowerShell ${{ matrix.powershell-version }} Tests
+        path: TestResults.xml
+        reporter: dotnet-nunit
+
+  security-scan:
+    runs-on: windows-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Security Scan
+      shell: pwsh
+      run: |
+        # Check for common security issues
+        $scriptFiles = Get-ChildItem -Path "./scripts" -Filter "*.ps1" -Recurse
+        $issues = @()
+        
+        foreach ($file in $scriptFiles) {
+          $content = Get-Content -Path $file.FullName -Raw
+          
+          # Check for potential security issues
+          $patterns = @{
+            'Hardcoded Password' = 'password\s*=\s*["\x27][^"\x27]+["\x27]'
+            'Hardcoded API Key' = 'api[_-]?key\s*=\s*["\x27][^"\x27]+["\x27]'
+            'Hardcoded Token' = 'token\s*=\s*["\x27][^"\x27]+["\x27]'
+            'Invoke-Expression Usage' = 'Invoke-Expression|iex\s'
+            'DownloadString Usage' = 'DownloadString'
+            'ExecutionPolicy Bypass' = 'ExecutionPolicy\s+Bypass'
+          }
+          
+          foreach ($patternName in $patterns.Keys) {
+            if ($content -match $patterns[$patternName]) {
+              $issues += [PSCustomObject]@{
+                File = $file.Name
+                Issue = $patternName
+                Line = ($content -split "`n" | Select-String $patterns[$patternName]).LineNumber
+              }
+            }
+          }
+        }
+        
+        if ($issues) {
+          Write-Host "Security Issues Found:" -ForegroundColor Red
+          $issues | Format-Table -AutoSize
+          
+          # For now, just warn - you can change this to exit 1 to fail the build
+          Write-Warning "Found $($issues.Count) potential security issues"
+        } else {
+          Write-Host "No security issues found!" -ForegroundColor Green
+        }
+
+  documentation:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Generate Documentation
+      run: |
+        # Create a simple documentation generation
+        echo "# Auto-Remediation Test Report" > TEST_REPORT.md
+        echo "" >> TEST_REPORT.md
+        echo "Generated on: $(date)" >> TEST_REPORT.md
+        echo "" >> TEST_REPORT.md
+        echo "## Scripts" >> TEST_REPORT.md
+        
+        for script in scripts/*.ps1; do
+          if [ -f "$script" ]; then
+            echo "- $(basename "$script")" >> TEST_REPORT.md
+          fi
+        done
+        
+        echo "" >> TEST_REPORT.md
+        echo "## Test Files" >> TEST_REPORT.md
+        
+        for test in tests/*.Tests.ps1; do
+          if [ -f "$test" ]; then
+            echo "- $(basename "$test")" >> TEST_REPORT.md
+          fi
+        done
+
+    - name: Upload Documentation
+      uses: actions/upload-artifact@v4
+      with:
+        name: documentation
+        path: TEST_REPORT.md
