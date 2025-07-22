@@ -320,6 +320,66 @@ function Start-SecurityRemediation {
             Parameters = @{ AllowedPorts = @() }
             Priority = 5
         }
+        "DiskHealth" = @{
+            Script = Join-Path $scriptDir "Fix-Disk-Health.ps1"
+            Description = "Disk Health (SMART, chkdsk, defrag)"
+            Parameters = @{}
+            Priority = 6
+        }
+        "StartupPrograms" = @{
+            Script = Join-Path $scriptDir "Fix-Startup-Programs.ps1"
+            Description = "Startup Programs (disable unnecessary items)"
+            Parameters = @{}
+            Priority = 7
+        }
+        "Antivirus" = @{
+            Script = Join-Path $scriptDir "Fix-Antivirus-Remediation.ps1"
+            Description = "Antivirus/Antimalware (check, update, scan)"
+            Parameters = @{}
+            Priority = 8
+        }
+        "DriverUpdates" = @{
+            Script = Join-Path $scriptDir "Fix-Driver-Updates.ps1"
+            Description = "Driver Updates (check, update)"
+            Parameters = @{}
+            Priority = 9
+        }
+        "BatteryHealth" = @{
+            Script = Join-Path $scriptDir "Fix-Battery-Health.ps1"
+            Description = "Battery Health (wear, calibration, power plans)"
+            Parameters = @{}
+            Priority = 10
+        }
+        "EventLogs" = @{
+            Script = Join-Path $scriptDir "Fix-Event-Logs.ps1"
+            Description = "Windows Event Logs (errors, warnings)"
+            Parameters = @{}
+            Priority = 11
+        }
+        "BrowserSecurity" = @{
+            Script = Join-Path $scriptDir "Fix-Browser-Security.ps1"
+            Description = "Browser Security (extensions, cache, toolbars)"
+            Parameters = @{}
+            Priority = 12
+        }
+        "PatchManagement" = @{
+            Script = Join-Path $scriptDir "Fix-Patch-Management.ps1"
+            Description = "Patch Management (missing OS/app patches)"
+            Parameters = @{}
+            Priority = 13
+        }
+        "UserAccountSecurity" = @{
+            Script = Join-Path $scriptDir "Fix-User-Account-Security.ps1"
+            Description = "User Account Security (unused/privileged accounts)"
+            Parameters = @{}
+            Priority = 14
+        }
+        "NetworkAdapterSettings" = @{
+            Script = Join-Path $scriptDir "Fix-Network-Adapter-Settings.ps1"
+            Description = "Network Adapter Settings (unused adapters, rogue Wi-Fi)"
+            Parameters = @{}
+            Priority = 15
+        }
     }
     
     # Determine which categories to run
@@ -464,9 +524,13 @@ function New-RemediationReport {
 </html>
 "@
         
+        # Ensure report directory exists
+        $reportDir = Split-Path $ReportPath -Parent
+        if (-not (Test-Path $reportDir)) {
+            New-Item -Path $reportDir -ItemType Directory -Force | Out-Null
+        }
         $html | Out-File -FilePath $ReportPath -Encoding UTF8
         Write-Log "Security remediation report generated: $ReportPath"
-        
         return $true
     }
     catch {
@@ -477,9 +541,8 @@ function New-RemediationReport {
 
 # Main execution
 if ($MyInvocation.InvocationName -ne '.') {
-    # Check if running as Administrator
+    # Check if running as Administrator, but allow WhatIf mode to run without admin
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    
     if (-not $isAdmin -and -not $WhatIf) {
         Write-Log "Administrator privileges required for security remediation" "ERROR"
         $output = @{
@@ -488,9 +551,10 @@ if ($MyInvocation.InvocationName -ne '.') {
             Message = "Administrator privileges required"
             LogPath = $LogPath
         } | ConvertTo-Json -Compress
-        
         Write-Host "NEXTHINK_OUTPUT: $output"
         exit 1
+    } elseif (-not $isAdmin -and $WhatIf) {
+        Write-Log "Running in WhatIf mode without administrator privileges. Remediation actions will be simulated only." "WARNING"
     }
     
     Write-Log "Starting Auto-Remediation Master Process"
@@ -524,15 +588,22 @@ if ($MyInvocation.InvocationName -ne '.') {
             $reportGenerated = New-RemediationReport -RemediationResults $masterResult -ReportPath $ReportPath
         }
         
-        # Summary
-        $successCount = ($masterResult.Results | Where-Object { $_.Success }).Count
-        $totalCount = $masterResult.Results.Count
-        $totalChanges = ($masterResult.Results | ForEach-Object { $_.ChangesApplied } | Measure-Object).Count
-        
-        Write-Log "Auto-Remediation Master Process completed"
-        Write-Log "Results: $successCount/$totalCount categories successful"
-        Write-Log "Total changes applied: $totalChanges"
-        Write-Log "Total execution time: $($masterResult.TotalExecutionTime) ms"
+
+        # Summary (with null checks)
+        if ($null -eq $masterResult -or $null -eq $masterResult.Results -or $masterResult.Results.Count -eq 0) {
+            $successCount = 0
+            $totalCount = 0
+            $totalChanges = 0
+            Write-Log "No remediation results available for summary statistics." 'ERROR'
+        } else {
+            $successCount = ($masterResult.Results | Where-Object { $_.Success }).Count
+            $totalCount = $masterResult.Results.Count
+            $totalChanges = ($masterResult.Results | ForEach-Object { $_.ChangesApplied } | Measure-Object).Count
+            Write-Log "Auto-Remediation Master Process completed"
+            Write-Log "Results: $successCount/$totalCount categories successful"
+            Write-Log "Total changes applied: $totalChanges"
+            Write-Log "Total execution time: $($masterResult.TotalExecutionTime) ms"
+        }
         
         # Output for Nexthink (JSON format)
         $output = @{
@@ -563,7 +634,57 @@ if ($MyInvocation.InvocationName -ne '.') {
         $jsonOutput = $output | ConvertTo-Json -Compress
         Write-Host "NEXTHINK_OUTPUT: $jsonOutput"
         
-        # Print a simple summary table to the console
+        # Print a summary table of topics/items handled by remediation
+        Write-Host "\nRemediation Topics and Items Handled:" -ForegroundColor Magenta
+        $remediationTopics = @(
+            [PSCustomObject]@{ Topic = 'UAC (User Account Control)'; Items = 'UAC registry settings, elevation prompts' },
+            [PSCustomObject]@{ Topic = 'Firewall'; Items = 'Firewall profiles, inbound/outbound rules, default actions' },
+            [PSCustomObject]@{ Topic = 'Windows Update'; Items = 'Update service, auto install, schedule' },
+            [PSCustomObject]@{ Topic = 'SMB/Registry'; Items = 'SMB signing, anonymous access, NTLM security' },
+            [PSCustomObject]@{ Topic = 'Network Security'; Items = 'Risky open ports, file sharing, risky services' },
+            [PSCustomObject]@{ Topic = 'Disk Health'; Items = 'SMART status, chkdsk, defragmentation' },
+            [PSCustomObject]@{ Topic = 'Startup Programs'; Items = 'Registry and folder startup items, unnecessary programs' },
+            [PSCustomObject]@{ Topic = 'Antivirus/Antimalware'; Items = 'Real-time protection, definitions, scan' },
+            [PSCustomObject]@{ Topic = 'Driver Updates'; Items = 'Outdated/missing drivers' },
+            [PSCustomObject]@{ Topic = 'Battery Health'; Items = 'Wear, calibration, power plans' },
+            [PSCustomObject]@{ Topic = 'Windows Event Logs'; Items = 'Recurring errors/warnings' },
+            [PSCustomObject]@{ Topic = 'Browser Security'; Items = 'Risky extensions, cache/history, toolbars' },
+            [PSCustomObject]@{ Topic = 'Patch Management'; Items = 'Missing OS/app patches' },
+            [PSCustomObject]@{ Topic = 'User Account Security'; Items = 'Unused/privileged accounts' },
+            [PSCustomObject]@{ Topic = 'Network Adapter Settings'; Items = 'Unused adapters, rogue Wi-Fi profiles' },
+            [PSCustomObject]@{ Topic = 'System/Service Anomalies'; Items = 'High CPU, low RAM/disk, critical service state' }
+        )
+        $remediationTopics | Format-Table -AutoSize | Out-String | Write-Host
+
+        # Suggest more topics to check and improve laptop health
+        Write-Host "\nSuggested Additional Topics for Laptop Health:" -ForegroundColor Magenta
+        $suggestedTopics = @(
+            [PSCustomObject]@{ Topic = 'Antivirus/Antimalware'; Suggestion = 'Check real-time protection, update definitions. Remediate: Enable/Update AV, run full scan.' },
+            [PSCustomObject]@{ Topic = 'Disk Health'; Suggestion = 'Check SMART status, defragmentation, disk errors. Remediate: Run chkdsk, defrag, replace failing disks.' },
+            [PSCustomObject]@{ Topic = 'Startup Programs'; Suggestion = 'Review and disable unnecessary startup items. Remediate: Disable via Task Manager or msconfig.' },
+            [PSCustomObject]@{ Topic = 'Driver Updates'; Suggestion = 'Check for outdated or missing drivers. Remediate: Update via Device Manager or OEM tools.' },
+            [PSCustomObject]@{ Topic = 'Battery Health'; Suggestion = 'Check battery wear, calibration, power plans. Remediate: Calibrate battery, adjust power settings.' },
+            [PSCustomObject]@{ Topic = 'Windows Event Logs'; Suggestion = 'Review for recurring errors/warnings. Remediate: Investigate and resolve root causes.' },
+            [PSCustomObject]@{ Topic = 'Browser Security'; Suggestion = 'Check for risky extensions, clear cache/history. Remediate: Remove risky add-ons, clear data.' },
+            [PSCustomObject]@{ Topic = 'Patch Management'; Suggestion = 'Check for missing OS and app patches. Remediate: Apply all critical/important updates.' },
+            [PSCustomObject]@{ Topic = 'User Account Security'; Suggestion = 'Check for unused/privileged accounts. Remediate: Remove/disable unused or risky accounts.' },
+            [PSCustomObject]@{ Topic = 'Network Adapter Settings'; Suggestion = 'Check for unused adapters, rogue Wi-Fi profiles. Remediate: Remove/disable as needed.' }
+        )
+        $suggestedTopics | Format-Table -AutoSize | Out-String | Write-Host
+
+        # Recommend folder and file organization for clarity
+        Write-Host "\nRecommended Folder/File Organization for Clarity:" -ForegroundColor Blue
+        $org = @(
+            'scripts/security-remediation/    # All remediation scripts (one per topic, e.g., Fix-UAC-Settings.ps1)',
+            'scripts/audit/                  # Scripts for auditing/reporting only (no changes)',
+            'logs/                           # All log files (auto-generated)',
+            'reports/                        # HTML/CSV/JSON reports',
+            'docs/                           # Documentation, usage guides, architecture',
+            'tests/                          # Pester or other test scripts',
+            'README.md                       # Project overview and quickstart',
+            'auto-remeddiation-concepts.md   # Concepts and design notes'
+        )
+        $org | ForEach-Object { Write-Host $_ -ForegroundColor Blue }
         Write-Host "\nSystem/Performance Context:" -ForegroundColor Yellow
         $sysTable = [PSCustomObject]@{
             Computer = $systemInfo.ComputerName
@@ -590,17 +711,50 @@ if ($MyInvocation.InvocationName -ne '.') {
         } else {
             Write-Host "\nNo system/service anomalies detected." -ForegroundColor Green
         }
+
         Write-Host "\nRemediation Summary Table:" -ForegroundColor Cyan
-        $table = @()
-        foreach ($r in $masterResult.Results) {
-            $table += [PSCustomObject]@{
-                Category = $r.Category
-                Success = $r.Success
-                Message = $r.Message
-                ExecutionTimeMs = $r.ExecutionTime
+        if ($null -eq $masterResult -or $null -eq $masterResult.Results -or $masterResult.Results.Count -eq 0) {
+            Write-Host "[ERROR] No remediation results available. Excel export skipped." -ForegroundColor Red
+            Write-Log "No remediation results available. Excel export skipped." 'ERROR'
+        } else {
+            $table = @()
+            foreach ($r in $masterResult.Results) {
+                $table += [PSCustomObject]@{
+                    Category = $r.Category
+                    Success = $r.Success
+                    Message = $r.Message
+                    ExecutionTimeMs = $r.ExecutionTime
+                }
+            }
+            $table | Format-Table -AutoSize | Out-String | Write-Host
+
+            # Export remediation summary to Excel in output folder
+            $excelDir = Join-Path $scriptDir '..\..\output'
+            if (-not (Test-Path $excelDir)) { New-Item -Path $excelDir -ItemType Directory -Force | Out-Null }
+            $excelPath = Join-Path $excelDir 'Remediation-Summary.xlsx'
+            $summary = @()
+            foreach ($r in $masterResult.Results) {
+                $summary += [PSCustomObject]@{
+                    Category = $r.Category
+                    Success = $r.Success
+                    Message = $r.Message
+                    ExecutionTimeMs = $r.ExecutionTime
+                    ChangesCount = if ($r.ChangesApplied) { $r.ChangesApplied.Count } else { 0 }
+                }
+            }
+            try {
+                if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
+                    Install-Module -Name ImportExcel -Force -Scope CurrentUser -ErrorAction SilentlyContinue
+                }
+                Import-Module ImportExcel -ErrorAction SilentlyContinue
+                $summary | Export-Excel -Path $excelPath -WorksheetName 'Summary' -AutoSize -TableName 'RemediationSummary' -Force
+                Write-Log "Remediation summary exported to $excelPath"
+                Write-Host "[INFO] Remediation summary exported to $excelPath" -ForegroundColor Green
+            } catch {
+                Write-Log "Failed to export remediation summary to Excel: $($_.Exception.Message)" 'ERROR'
+                Write-Host "[ERROR] Failed to export remediation summary to Excel: $($_.Exception.Message)" -ForegroundColor Red
             }
         }
-        $table | Format-Table -AutoSize | Out-String | Write-Host
 
         if ($masterResult.OverallSuccess) {
             exit 0

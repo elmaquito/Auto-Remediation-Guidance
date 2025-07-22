@@ -9,12 +9,19 @@ Welcome! This template repository is designed for teams implementing auto-remedi
 
 ---
 
-## 📚 Contents
 
-- `docs/` — Guidance and documentation on auto-remediation concepts and Nexthink v6 integration.
-- `scripts/` — Example PowerShell 5.1 scripts for remediation scenarios.
-- `tests/` — Comprehensive test suite using Pester framework.
-- `playbooks/` — End-to-end remediation playbooks and workflows.
+## 📚 Folder Structure
+
+- `docs/` — Guidance, usage, and architecture documentation.
+- `scripts/security-remediation/` — All remediation scripts (one per topic, e.g., Fix-UAC-Settings.ps1).
+- `scripts/audit/` — Audit-only scripts (no changes made).
+- `tests/` — All test scripts (unit, integration, legacy, and test runners).
+- `logs/` — All log files (auto-generated and archived logs).
+- `output/` — All generated reports (HTML, Excel, JSON, etc.).
+- `reports/` — Additional reports and exports.
+- `security-archive/` — Archived advanced/standalone security scripts (not used by master script).
+- `README.md` — Project overview and quickstart.
+- `auto-remeddiation-concepts.md` — Concepts and design notes.
 
 ---
 
